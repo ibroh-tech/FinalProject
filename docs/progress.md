@@ -18,7 +18,8 @@ next week's chat.
 - [x] Write `docs/architecture.md` and `docs/progress.md`.
 - [x] Collect and summarize five papers on LLM test generation in `docs/literature.md`
       (notes based on abstracts/metadata; full-text reading still pending).
-- [ ] Push the repository to GitHub.
+- [x] Push the repository to GitHub.
+      (https://github.com/ibroh-tech/FinalProject)
 
 ### What was built
 
