@@ -1,8 +1,9 @@
 # Architecture
 
-Status: **Week 1 baseline**. This document describes the target architecture and clearly marks
-what exists today. Only the monorepo, the two Spring Boot skeletons, PostgreSQL, and the
-documentation exist so far.
+Status: **Week 2 baseline**. This document describes the target architecture and clearly marks
+what exists today. The monorepo, PostgreSQL environment, and both Spring Boot skeletons exist;
+`sample-api` now has validated Users and Products CRUD endpoints and REST Assured tests. The
+assistant side is still a skeleton.
 
 ## 1. Purpose
 
@@ -46,7 +47,7 @@ definitions). Java code validates that data and builds the HTTP requests itself.
 | 6 | Execution Engine | Build REST Assured calls, run, record results | Planned, Week 9 |
 | 7 | Evaluation Engine | JaCoCo, PIT, defect detection, timings | Planned, Weeks 10–12 |
 | 8 | PostgreSQL | Projects, endpoints, generations, tests, executions, reports | Running, Week 1 |
-| 9 | Sample API | 10–15 endpoints used as the system under test | Skeleton, Weeks 2–4 |
+| 9 | Sample API | 10–15 endpoints used as the system under test | Users + Products CRUD, Week 2; Orders/Auth in Week 3 |
 
 ## 4. Target data flow
 
@@ -94,6 +95,49 @@ FinalProject/
 
 `assistant-ui/` will be added in Week 13.
 
+### 5.1 Sample API internals (implemented in Week 2)
+
+Each resource follows the same structure:
+
+```
+HTTP request
+   ▼
+Controller  →  DTO validation (@Valid)
+   ▼
+Service (@Transactional)  →  business rules / uniqueness
+   ▼
+Repository (Spring Data JPA)  →  Entity
+   ▼
+PostgreSQL (sample_api)
+```
+
+- DTOs are Java records; entities never leave the service layer.
+- Bean Validation rejects malformed input with `400 Bad Request`.
+- Services own transaction boundaries and throw domain exceptions for `404 Not Found` and
+  `409 Conflict`.
+- `PUT` is a full replacement; there is no `PATCH`.
+- Eight endpoints are implemented now (four per resource). Week 3 adds four order and three
+  authentication endpoints, keeping the total at 15 as required by the brief.
+
+| Method | Path | Success | Errors |
+|--------|------|---------|--------|
+| POST | `/api/users` | 201 | 400, 409 |
+| GET | `/api/users/{id}` | 200 | 404 |
+| PUT | `/api/users/{id}` | 200 | 400, 404, 409 |
+| DELETE | `/api/users/{id}` | 204 | 404 |
+| POST | `/api/products` | 201 | 400 |
+| GET | `/api/products/{id}` | 200 | 404 |
+| PUT | `/api/products/{id}` | 200 | 400, 404 |
+| DELETE | `/api/products/{id}` | 204 | 404 |
+
+User rules: name not blank (≤120 characters); valid unique email (≤254 characters, stored
+lowercase); age 1–120. Product rules: name not blank (≤120); optional description (≤500);
+price ≥ 0 with at most 8 integer and 2 decimal digits; stock ≥ 0.
+
+Tests: `UserApiTest` covers the five required `POST /api/users` cases; `UserCrudApiTest` and
+`ProductApiTest` cover the remaining endpoints. The suite runs against the local `sample_api`
+database and cleans the `users` and `products` tables around each test.
+
 ## 6. Runtime topology (development)
 
 | Service | Port | Database | Notes |
@@ -122,6 +166,9 @@ The schema follows the project documentation:
 | `evaluation_reports` | Line/branch coverage, mutation score, defects detected, validity rate, times |
 
 Relations: `users → projects → api_endpoints → test_cases → test_executions → evaluation_reports`.
+
+The sample API keeps its own `users` and `products` tables in the separate `sample_api`
+database; they are not part of the assistant schema above.
 
 JPA entities start in Week 5. Until then `ddl-auto: update` produces no tables.
 
@@ -176,9 +223,22 @@ three times because output varies. Report failures honestly.
 | No controllers/entities in Week 1 | Matches the Week 1 brief; domain code begins in Week 2. |
 | Human review before execution | AI output is untrusted; review is part of the research design. |
 
-## 12. Deliberately not implemented yet
+## 12. Week 2 decisions
 
-- Any controller, entity, repository, service, or AI call.
+| Decision | Rationale |
+|----------|-----------|
+| DTO records at the controller boundary | Keeps entities out of the API and makes validation rules explicit. |
+| Services own transactions and uniqueness checks | Controllers stay thin; business rules are testable in one place. |
+| Emails normalised to lowercase | Makes uniqueness case-insensitive and consistent with the database constraint. |
+| `PUT` performs a full replacement | Simple, predictable semantics for generated tests. |
+| Eight endpoints in Week 2, not ten | Leaves room for orders and auth to reach the required 10–15 endpoints in Week 3. |
+| Integration tests against local PostgreSQL | Exercises the real database constraint; a dedicated test database is a later improvement. |
+| Five required POST tests plus two CRUD flow tests | Matches the brief and verifies every endpoint, not only creation. |
+
+## 13. Deliberately not implemented yet
+
+- Assistant-side controllers, entities, repositories, services, and any AI call.
 - Springdoc/OpenAPI publishing (Week 4), Swagger Parser (Week 5), Gemini provider (Week 6).
-- JaCoCo, PIT, REST Assured suite, evaluation schema, dashboard.
-- Local Ollama provider (bonus, only if schedule allows).
+- Orders and authentication endpoints, global error handler (Week 3).
+- JaCoCo, PIT, assistant execution/evaluation flow, database-backed test definitions (Weeks 8–12).
+- React dashboard (Week 13) and local Ollama provider (bonus, only if schedule allows).

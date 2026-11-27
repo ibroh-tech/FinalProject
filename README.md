@@ -4,9 +4,9 @@ Dissertation project by Ibrohim. The assistant reads an OpenAPI specification, a
 (Google Gemini) for structured JSON test definitions, validates them, executes them with
 REST Assured against a sample Spring Boot API, and evaluates the result with JaCoCo and PIT.
 
-**Current status: Week 1 complete** — monorepo, buildable Spring Boot applications,
-PostgreSQL development environment, and initial documentation. No controllers, entities,
-or AI integration yet (those start in Weeks 2–8).
+**Current status: Week 2 complete** — the sample API now exposes validated Users and
+Products CRUD endpoints, covered by REST Assured integration tests. The testing assistant,
+AI integration, and dashboard are still planned (Weeks 5–13).
 
 ## Repository layout
 
@@ -101,10 +101,78 @@ Expected startup evidence:
 - `Tomcat started on port 8080 (http)` for sample-api.
 - `Tomcat started on port 8081 (http)` for assistant-backend.
 
-There are no controllers yet, so `/` returns a 404; this is expected in Week 1.
+There are no endpoints on `/`, so it returns a 404. The API lives under `/api/users` and
+`/api/products` (see below).
 
 Stop the applications with `Ctrl+C`. Stop the database with `docker compose down`
 (add `-v` only if you also want to delete the data volume).
+
+## Sample API endpoints (Week 2)
+
+| Method | Path | Success | Errors |
+|--------|------|---------|--------|
+| POST | `/api/users` | 201 | 400 invalid body, 409 duplicate email |
+| GET | `/api/users/{id}` | 200 | 404 not found |
+| PUT | `/api/users/{id}` | 200 | 400 invalid body, 404 not found, 409 duplicate email |
+| DELETE | `/api/users/{id}` | 204 | 404 not found |
+| POST | `/api/products` | 201 | 400 invalid body |
+| GET | `/api/products/{id}` | 200 | 404 not found |
+| PUT | `/api/products/{id}` | 200 | 400 invalid body, 404 not found |
+| DELETE | `/api/products/{id}` | 204 | 404 not found |
+
+### Validation rules
+
+**User**
+
+- `name`: required, not blank, at most 120 characters.
+- `email`: required, valid address, at most 254 characters, unique. Email is stored in
+  lowercase, so duplicates are rejected case-insensitively with `409 Conflict`.
+- `age`: required, integer from 1 to 120 inclusive.
+- Invalid input returns `400 Bad Request`; successful creation returns `201 Created`.
+
+**Product**
+
+- `name`: required, not blank, at most 120 characters.
+- `description`: optional, at most 500 characters; blank descriptions are stored as `null`.
+- `price`: required, at least 0, at most 8 integer digits and 2 decimal places.
+- `stock`: required, integer at least 0.
+
+Example:
+
+```bash
+curl -i -X POST http://localhost:8080/api/users \
+  -H "Content-Type: application/json" \
+  -d '{"name":"John Doe","email":"john.doe@example.com","age":25}'
+```
+
+## 4. Run the tests
+
+REST Assured tests start the application on a random port and use the local `sample_api`
+database. They delete rows from `users` and `products` before and after each test, so do not
+point them at a database with data you want to keep. PostgreSQL must be running.
+
+Windows:
+
+```powershell
+cd sample-api
+.\mvnw.cmd test
+```
+
+Bash:
+
+```bash
+cd sample-api && ./mvnw test
+```
+
+`UserApiTest` contains the five required tests for `POST /api/users` (valid creation, blank
+name, invalid email, age out of range, duplicate email). `UserCrudApiTest` and
+`ProductApiTest` cover the remaining CRUD endpoints.
+
+To build without starting PostgreSQL, skip the integration tests:
+
+```powershell
+.\mvnw.cmd clean package -DskipTests
+```
 
 ## Configuration
 
@@ -129,9 +197,11 @@ The API key will never be stored in this repository.
 
 - [`docs/architecture.md`](docs/architecture.md) — planned architecture, components, data flow, decisions.
 - [`docs/literature.md`](docs/literature.md) — notes on five LLM test-generation papers.
-- [`docs/progress.md`](docs/progress.md) — weekly progress log and Week 1 verification record.
+- [`docs/progress.md`](docs/progress.md) — weekly progress log and verification records.
 
-## Week 1 verification
+## Verification
+
+### Week 1
 
 | Requirement | Status |
 |-------------|--------|
@@ -143,5 +213,17 @@ The API key will never be stored in this repository.
 | PostgreSQL starts with Docker | Done |
 | Both apps connect to their database | Done |
 | Repository pushed to GitHub | Done |
+
+### Week 2
+
+| Requirement | Status |
+|-------------|--------|
+| Users CRUD endpoints (`POST`, `GET`, `PUT`, `DELETE`) | Done |
+| Products CRUD endpoints (`POST`, `GET`, `PUT`, `DELETE`) | Done |
+| `POST /api/users`: name, email, age validation | Done — 400 on invalid input |
+| Duplicate email rejected | Done — 409, case-insensitive |
+| Five REST Assured tests for `POST /api/users` | Done — all pass |
+| All endpoints work | Done — 7 integration tests pass; 30/30 manual curl checks pass |
+| `mvn clean package` | BUILD SUCCESS with 7 tests |
 
 See [`docs/progress.md`](docs/progress.md) for the exact commands and observed output.
