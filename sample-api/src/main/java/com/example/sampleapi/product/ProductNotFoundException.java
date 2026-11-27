@@ -1,12 +1,12 @@
 package com.example.sampleapi.product;
 
 import org.springframework.http.HttpStatus;
-import org.springframework.web.bind.annotation.ResponseStatus;
 
-@ResponseStatus(HttpStatus.NOT_FOUND)
-public class ProductNotFoundException extends RuntimeException {
+import com.example.sampleapi.common.ApiException;
+
+public class ProductNotFoundException extends ApiException {
 
     public ProductNotFoundException(Long id) {
-        super("Product not found: " + id);
+        super(HttpStatus.NOT_FOUND, "Product not found: " + id);
     }
 }

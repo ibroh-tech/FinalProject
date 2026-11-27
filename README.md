@@ -4,9 +4,10 @@ Dissertation project by Ibrohim. The assistant reads an OpenAPI specification, a
 (Google Gemini) for structured JSON test definitions, validates them, executes them with
 REST Assured against a sample Spring Boot API, and evaluates the result with JaCoCo and PIT.
 
-**Current status: Week 2 complete** — the sample API now exposes validated Users and
-Products CRUD endpoints, covered by REST Assured integration tests. The testing assistant,
-AI integration, and dashboard are still planned (Weeks 5–13).
+**Current status: Week 3 complete on the `develop` branch** — the sample API exposes 15
+validated endpoints (users, products, orders, authentication), a unified JSON error format,
+and 24 REST Assured integration tests. `main` currently contains Weeks 1–2; Week 3 is not
+merged into `main` yet.
 
 ## Repository layout
 
@@ -101,24 +102,33 @@ Expected startup evidence:
 - `Tomcat started on port 8080 (http)` for sample-api.
 - `Tomcat started on port 8081 (http)` for assistant-backend.
 
-There are no endpoints on `/`, so it returns a 404. The API lives under `/api/users` and
-`/api/products` (see below).
+There are no endpoints on `/`, so it returns a 404. The API lives under `/api/users`,
+`/api/products`, `/api/orders`, and `/api/auth` (see below).
 
 Stop the applications with `Ctrl+C`. Stop the database with `docker compose down`
 (add `-v` only if you also want to delete the data volume).
 
-## Sample API endpoints (Week 2)
+## Sample API endpoints (Week 3)
 
 | Method | Path | Success | Errors |
 |--------|------|---------|--------|
 | POST | `/api/users` | 201 | 400 invalid body, 409 duplicate email |
 | GET | `/api/users/{id}` | 200 | 404 not found |
-| PUT | `/api/users/{id}` | 200 | 400 invalid body, 404 not found, 409 duplicate email |
+| PUT | `/api/users/{id}` | 200 | 400, 404, 409 duplicate email |
 | DELETE | `/api/users/{id}` | 204 | 404 not found |
 | POST | `/api/products` | 201 | 400 invalid body |
 | GET | `/api/products/{id}` | 200 | 404 not found |
-| PUT | `/api/products/{id}` | 200 | 400 invalid body, 404 not found |
+| PUT | `/api/products/{id}` | 200 | 400, 404 |
 | DELETE | `/api/products/{id}` | 204 | 404 not found |
+| POST | `/api/orders` | 201 | 400, 404 unknown user/product, 409 insufficient stock |
+| GET | `/api/orders/{id}` | 200 | 404 not found |
+| PUT | `/api/orders/{id}` | 200 | 400, 404, 409 invalid transition/quantity/stock |
+| POST | `/api/orders/{id}/cancel` | 200 | 404, 409 shipped/already cancelled |
+| POST | `/api/auth/register` | 201 | 400, 409 duplicate account |
+| POST | `/api/auth/login` | 200 | 400, 401 invalid credentials |
+| POST | `/api/auth/refresh` | 200 | 400, 401 invalid/expired/reused token |
+
+The full rule set is in [`docs/sample-api-rules.md`](docs/sample-api-rules.md).
 
 ### Validation rules
 
@@ -137,6 +147,24 @@ Stop the applications with `Ctrl+C`. Stop the database with `docker compose down
 - `price`: required, at least 0, at most 8 integer digits and 2 decimal places.
 - `stock`: required, integer at least 0.
 
+**Order**
+
+- `userId` and `productId` must exist; missing IDs return 404.
+- `quantity` is 1–1000 and cannot exceed product stock (409).
+- New orders start as `PENDING`.
+- Allowed transitions: `PENDING → PAID → SHIPPED`; cancellation is allowed before shipping.
+- A shipped order cannot be cancelled (409). A shipped or cancelled order cannot be modified.
+- Quantity cannot change after the order becomes `PAID`.
+- Creating or cancelling an order does not modify product stock.
+
+**Authentication**
+
+- Register requires a non-blank name, unique valid email, and a password of 8–72 characters.
+- Passwords are stored as BCrypt hashes; duplicate account email returns 409.
+- Login with bad credentials returns 401.
+- Refresh tokens rotate; reusing an old token returns 401.
+- Access tokens expire after 15 minutes; refresh tokens after 7 days.
+
 Example:
 
 ```bash
@@ -145,11 +173,25 @@ curl -i -X POST http://localhost:8080/api/users \
   -d '{"name":"John Doe","email":"john.doe@example.com","age":25}'
 ```
 
+All errors use one shape:
+
+```json
+{
+  "timestamp": "2026-11-27T13:15:30.123Z",
+  "status": 409,
+  "error": "Conflict",
+  "message": "A shipped order cannot be cancelled",
+  "path": "/api/orders/1/cancel",
+  "details": []
+}
+```
+
 ## 4. Run the tests
 
 REST Assured tests start the application on a random port and use the local `sample_api`
-database. They delete rows from `users` and `products` before and after each test, so do not
-point them at a database with data you want to keep. PostgreSQL must be running.
+database. They delete rows from `users`, `products`, `orders`, `accounts`, and `auth_sessions`
+before and after each test, so do not point them at a database with data you want to keep.
+PostgreSQL must be running.
 
 Windows:
 
@@ -166,7 +208,11 @@ cd sample-api && ./mvnw test
 
 `UserApiTest` contains the five required tests for `POST /api/users` (valid creation, blank
 name, invalid email, age out of range, duplicate email). `UserCrudApiTest` and
-`ProductApiTest` cover the remaining CRUD endpoints.
+`ProductApiTest` cover the remaining user/product CRUD endpoints. `OrderApiTest` covers order
+creation, totals, stock conflicts, status transitions, cancellation rules, and error shape.
+`AuthApiTest` covers register, login, refresh rotation, duplicate accounts, and 401/400 errors.
+`ErrorResponseTest` verifies the unified 404 and 405 responses. The suite currently has
+**24 tests**.
 
 To build without starting PostgreSQL, skip the integration tests:
 
@@ -196,6 +242,7 @@ The API key will never be stored in this repository.
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — planned architecture, components, data flow, decisions.
+- [`docs/sample-api-rules.md`](docs/sample-api-rules.md) — all 15 endpoints, validation rules, error format, business rules.
 - [`docs/literature.md`](docs/literature.md) — notes on five LLM test-generation papers.
 - [`docs/progress.md`](docs/progress.md) — weekly progress log and verification records.
 
@@ -225,5 +272,19 @@ The API key will never be stored in this repository.
 | Five REST Assured tests for `POST /api/users` | Done — all pass |
 | All endpoints work | Done — 7 integration tests pass; 30/30 manual curl checks pass |
 | `mvn clean package` | BUILD SUCCESS with 7 tests |
+
+### Week 3
+
+| Requirement | Status |
+|-------------|--------|
+| Orders: create, get, update, cancel | Done — 8 REST Assured tests |
+| Authentication: register, login, refresh token | Done — 7 REST Assured tests |
+| Global exception handler with consistent JSON errors | Done — handler covers 400/401/404/405/409/500; tested for 400/401/404/405/409 |
+| Consistent error body for 400, 404, 409 | Done — `timestamp`, `status`, `error`, `message`, `path`, `details` |
+| 10–15 endpoints total | Done — exactly 15 |
+| Business rules documented | Done — `docs/sample-api-rules.md` |
+| All endpoints work | Done — 24 tests pass |
+| `mvn clean package` | BUILD SUCCESS with 24 tests |
+| Branch policy | Week 3 is on `develop`; `main` is unchanged |
 
 See [`docs/progress.md`](docs/progress.md) for the exact commands and observed output.

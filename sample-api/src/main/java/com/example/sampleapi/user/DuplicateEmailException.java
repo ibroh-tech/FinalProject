@@ -1,12 +1,12 @@
 package com.example.sampleapi.user;
 
 import org.springframework.http.HttpStatus;
-import org.springframework.web.bind.annotation.ResponseStatus;
 
-@ResponseStatus(HttpStatus.CONFLICT)
-public class DuplicateEmailException extends RuntimeException {
+import com.example.sampleapi.common.ApiException;
+
+public class DuplicateEmailException extends ApiException {
 
     public DuplicateEmailException(String email) {
-        super("A user with email " + email + " already exists");
+        super(HttpStatus.CONFLICT, "A user with email " + email + " already exists");
     }
 }

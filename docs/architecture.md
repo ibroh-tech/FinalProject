@@ -1,9 +1,10 @@
 # Architecture
 
-Status: **Week 2 baseline**. This document describes the target architecture and clearly marks
+Status: **Week 3 baseline**. This document describes the target architecture and clearly marks
 what exists today. The monorepo, PostgreSQL environment, and both Spring Boot skeletons exist;
-`sample-api` now has validated Users and Products CRUD endpoints and REST Assured tests. The
-assistant side is still a skeleton.
+`sample-api` now has 15 validated endpoints (users, products, orders, authentication), a unified
+error format, and 24 REST Assured tests. The assistant side is still a skeleton. Week 3 work is
+on the `develop` branch; `main` contains Weeks 1–2.
 
 ## 1. Purpose
 
@@ -47,7 +48,7 @@ definitions). Java code validates that data and builds the HTTP requests itself.
 | 6 | Execution Engine | Build REST Assured calls, run, record results | Planned, Week 9 |
 | 7 | Evaluation Engine | JaCoCo, PIT, defect detection, timings | Planned, Weeks 10–12 |
 | 8 | PostgreSQL | Projects, endpoints, generations, tests, executions, reports | Running, Week 1 |
-| 9 | Sample API | 10–15 endpoints used as the system under test | Users + Products CRUD, Week 2; Orders/Auth in Week 3 |
+| 9 | Sample API | 10–15 endpoints used as the system under test | 15 endpoints, Weeks 2–3 |
 
 ## 4. Target data flow
 
@@ -95,7 +96,7 @@ FinalProject/
 
 `assistant-ui/` will be added in Week 13.
 
-### 5.1 Sample API internals (implemented in Week 2)
+### 5.1 Sample API internals (implemented in Weeks 2–3)
 
 Each resource follows the same structure:
 
@@ -113,11 +114,14 @@ PostgreSQL (sample_api)
 
 - DTOs are Java records; entities never leave the service layer.
 - Bean Validation rejects malformed input with `400 Bad Request`.
-- Services own transaction boundaries and throw domain exceptions for `404 Not Found` and
-  `409 Conflict`.
+- Services own transaction boundaries and throw `ApiException` subclasses carrying the HTTP status.
+- A single `@RestControllerAdvice` (`GlobalExceptionHandler`) renders every error with the same
+  JSON body: `timestamp`, `status`, `error`, `message`, `path`, `details`.
 - `PUT` is a full replacement; there is no `PATCH`.
-- Eight endpoints are implemented now (four per resource). Week 3 adds four order and three
-  authentication endpoints, keeping the total at 15 as required by the brief.
+- Exactly 15 endpoints are implemented: 4 users, 4 products, 4 orders, 3 authentication.
+- Orders model `PENDING → PAID → SHIPPED`, with cancellation allowed before shipping.
+- Authentication uses BCrypt password hashes and rotating opaque access/refresh tokens stored in
+  `auth_sessions`; access tokens last 15 minutes, refresh tokens 7 days.
 
 | Method | Path | Success | Errors |
 |--------|------|---------|--------|
@@ -129,14 +133,27 @@ PostgreSQL (sample_api)
 | GET | `/api/products/{id}` | 200 | 404 |
 | PUT | `/api/products/{id}` | 200 | 400, 404 |
 | DELETE | `/api/products/{id}` | 204 | 404 |
+| POST | `/api/orders` | 201 | 400, 404, 409 |
+| GET | `/api/orders/{id}` | 200 | 404 |
+| PUT | `/api/orders/{id}` | 200 | 400, 404, 409 |
+| POST | `/api/orders/{id}/cancel` | 200 | 404, 409 |
+| POST | `/api/auth/register` | 201 | 400, 409 |
+| POST | `/api/auth/login` | 200 | 400, 401 |
+| POST | `/api/auth/refresh` | 200 | 400, 401 |
 
 User rules: name not blank (≤120 characters); valid unique email (≤254 characters, stored
 lowercase); age 1–120. Product rules: name not blank (≤120); optional description (≤500);
-price ≥ 0 with at most 8 integer and 2 decimal digits; stock ≥ 0.
+price ≥ 0 with at most 8 integer and 2 decimal digits; stock ≥ 0. Order rules: quantity 1–1000;
+quantity cannot exceed stock; shipped orders cannot be cancelled or modified; quantity cannot
+change after payment; status transitions are restricted. Authentication rules: unique account
+email; password 8–72 characters hashed with BCrypt; invalid login or refresh token returns 401;
+refresh tokens rotate. Full details are in `docs/sample-api-rules.md`.
 
 Tests: `UserApiTest` covers the five required `POST /api/users` cases; `UserCrudApiTest` and
-`ProductApiTest` cover the remaining endpoints. The suite runs against the local `sample_api`
-database and cleans the `users` and `products` tables around each test.
+`ProductApiTest` cover user/product CRUD; `OrderApiTest` covers order lifecycle and conflict
+rules; `AuthApiTest` covers register/login/refresh; `ErrorResponseTest` covers unified 404/405
+responses. The suite has 24 tests and runs against the local `sample_api` database, cleaning its
+tables around each test.
 
 ## 6. Runtime topology (development)
 
@@ -167,8 +184,10 @@ The schema follows the project documentation:
 
 Relations: `users → projects → api_endpoints → test_cases → test_executions → evaluation_reports`.
 
-The sample API keeps its own `users` and `products` tables in the separate `sample_api`
-database; they are not part of the assistant schema above.
+The sample API keeps its own tables in the separate `sample_api` database: `users`,
+`products`, `orders`, `accounts`, and `auth_sessions`. They are not part of the assistant
+schema above. Orders store `userId` and `productId` values to keep the sample API simple; no
+foreign keys are declared for those two columns.
 
 JPA entities start in Week 5. Until then `ddl-auto: update` produces no tables.
 
@@ -199,6 +218,9 @@ and duration so results are reproducible.
 | Secret leakage | API key from environment variable only; `.env` ignored |
 | Silent data loss | Invalid/duplicate definitions persisted with status and reason |
 | Unrepeatable runs | Database reset before execution; raw generations stored; 3+ runs |
+| Password leakage | Passwords stored only as BCrypt hashes and never returned by any endpoint |
+| Refresh-token replay | Refresh tokens rotate; the old session is revoked and reuse returns 401 |
+| Error leakage | One error format; unexpected 500s return a generic message and log the stack trace |
 
 A failed test is not automatically a product defect: it may be a wrong AI expectation.
 Results are classified as `PASSED`, `FAILED` (needs review), `INVALID`, or `ERROR`.
@@ -235,10 +257,26 @@ three times because output varies. Report failures honestly.
 | Integration tests against local PostgreSQL | Exercises the real database constraint; a dedicated test database is a later improvement. |
 | Five required POST tests plus two CRUD flow tests | Matches the brief and verifies every endpoint, not only creation. |
 
-## 13. Deliberately not implemented yet
+## 13. Week 3 decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Exactly 15 endpoints | Meets the 10–15 target: 4 users, 4 products, 4 orders, 3 auth. |
+| Order status model `PENDING → PAID → SHIPPED`, plus `CANCELLED` | Gives testable lifecycle rules, especially "a shipped order cannot be cancelled". |
+| No stock decrement on order creation/cancellation | Keeps order tests independent and repeatable; stock is only validated. |
+| Order stores a unit-price snapshot | Totals stay stable if the product price later changes. |
+| Separate `accounts` table for authentication | Week 2 domain users do not have passwords or a login flow; separating avoids weakening their contract. |
+| BCrypt via `spring-security-crypto` | Standard password hashing without pulling in the full security filter chain. |
+| Opaque UUID access/refresh tokens stored in `auth_sessions` | No JWT library needed; refresh rotation and revocation are easy to demonstrate. |
+| Single `GlobalExceptionHandler` and `ApiException` base | Guarantees one error shape for validation, 404, 409, 401, 405, and 500. |
+| Validation `details` array | Gives clients field-level reasons while keeping the top-level shape stable. |
+| Week 3 on `develop` | Keeps `main` at the verified Week 2 state until review/merge. |
+
+## 14. Deliberately not implemented yet
 
 - Assistant-side controllers, entities, repositories, services, and any AI call.
 - Springdoc/OpenAPI publishing (Week 4), Swagger Parser (Week 5), Gemini provider (Week 6).
-- Orders and authentication endpoints, global error handler (Week 3).
 - JaCoCo, PIT, assistant execution/evaluation flow, database-backed test definitions (Weeks 8–12).
 - React dashboard (Week 13) and local Ollama provider (bonus, only if schedule allows).
+- Token validation on protected endpoints: authentication is a standalone workflow for now.
+- Stock reservation/decrement and payment processing: deliberately simplified.

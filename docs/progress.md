@@ -189,10 +189,10 @@ remains in the repository.
   `users` and `products` rows. They must not be pointed at data that matters. A dedicated test
   database or Testcontainers setup is a later improvement.
 - Error bodies still use Spring Boot's default error format. Week 3 adds a global
-  `@ControllerAdvice` so 400/404/409 responses share one documented JSON shape.
+  `@ControllerAdvice` so 400/404/409 responses share one documented JSON shape. (Resolved in Week 3.)
 - A concurrent duplicate-email insert that passes the service check would be rejected by the
   database unique constraint and currently surface as a 500; this race is rare in the experiment
-  but will be mapped to 409 when the global handler is added.
+  but will be mapped to 409 when the global handler is added. (Resolved in Week 3.)
 - No list/pagination endpoints by design; tests fetch known IDs.
 - Product fields (`description`, `price`, `stock`) were chosen because the brief did not specify
   them; Week 3 orders will build on `price` and `stock`.
@@ -210,3 +210,123 @@ remains in the repository.
 
 Add Orders (create, get, update, cancel) and Authentication (register, login, refresh token),
 a global exception handler with one JSON error shape, and documented business rules.
+
+## Week 3 — Sample API: orders, auth, error handling
+
+**Goal:** 10–15 endpoints in total and consistent errors.
+
+**Dates:** 2026-11-27
+
+**Branch:** `develop` (not merged into `main`; `main` remains at Week 2).
+
+### Tasks from the brief
+
+- [x] Orders: create, get, update, cancel.
+- [x] Authentication: register, login, refresh token.
+- [x] `@ControllerAdvice` global exception handler with one JSON error body
+      (400 / 401 / 404 / 405 / 409 / 500).
+- [x] Business rules that tests can later detect, including "a shipped order cannot be cancelled".
+- [x] 10–15 endpoints work; exactly 15 are implemented.
+- [x] Rules listed in `docs/sample-api-rules.md`.
+
+### What was built
+
+| Area | Files / behaviour |
+|------|-------------------|
+| Orders | `order` package: `Order`, `OrderStatus`, repository, service, controller, create/update DTOs, response, 404/409 exceptions. 4 endpoints. |
+| Authentication | `auth` package: `Account`, `AuthSession`, repositories, `AuthService`, `AuthController`, DTOs, BCrypt config, 401/409 exceptions. 3 endpoints. |
+| Errors | `common` package: `ApiException`, `ErrorResponse`, `GlobalExceptionHandler`. All errors share one JSON shape. |
+| Rules | `docs/sample-api-rules.md` lists all 15 endpoints, validation, status transitions, token rules, and 13 testable business rules. |
+| Tests | `OrderApiTest` (8), `AuthApiTest` (7), `ErrorResponseTest` (2), plus the 7 Week 2 tests. |
+
+Order model:
+
+- Create stores a unit-price snapshot and `totalPrice = unitPrice × quantity`.
+- New orders are `PENDING`.
+- `PENDING → PAID → SHIPPED`; cancellation is allowed from `PENDING` and `PAID`.
+- A shipped order cannot be cancelled or modified.
+- Quantity cannot change after the order becomes `PAID`.
+- Quantity must be 1–1000 and cannot exceed product stock.
+- Stock is validated but deliberately not decremented.
+
+Authentication model:
+
+- Separate `accounts` table; domain `users` remain unchanged.
+- Passwords are BCrypt hashes; password rule is 8–72 characters.
+- Register/login return opaque UUID access and refresh tokens.
+- Access tokens last 15 minutes, refresh tokens 7 days.
+- Refresh rotates the pair and revokes the old session; reusing an old refresh token returns 401.
+- No endpoint requires a token yet; this is the standalone authentication workflow.
+
+Unified error body:
+
+```json
+{
+  "timestamp": "2026-11-27T13:15:30.123Z",
+  "status": 409,
+  "error": "Conflict",
+  "message": "A shipped order cannot be cancelled",
+  "path": "/api/orders/1/cancel",
+  "details": []
+}
+```
+
+### Verification record
+
+| Check | Command | Result |
+|-------|---------|--------|
+| Full build with tests | `mvn -B -ntp clean package` in `sample-api/` | BUILD SUCCESS; 24 tests, 0 failures, 0 errors |
+| Order lifecycle tests | `OrderApiTest` | 8 passed |
+| Auth flow tests | `AuthApiTest` | 7 passed |
+| Error format tests | `ErrorResponseTest` | 2 passed |
+| Week 2 regression tests | `UserApiTest`, `UserCrudApiTest`, `ProductApiTest` | 7 passed |
+| Endpoint count | rules inventory | 15 endpoints (4 + 4 + 4 + 3) |
+| Error shape | assertions on 400, 401, 404, 405, 409 | same keys and status/error/path values |
+| Database schema | Hibernate update against `sample_api` | `orders`, `accounts`, `auth_sessions` added alongside `users`, `products` |
+
+### Decisions made
+
+1. Exactly 15 endpoints, leaving no room for extra list/pagination routes in this week.
+2. Order lifecycle `PENDING → PAID → SHIPPED` with `CANCELLED`; update cannot jump from
+   `PENDING` to `SHIPPED`.
+3. Price snapshot on the order so later product price changes do not rewrite history.
+4. Stock is checked but not decremented, keeping order tests independent and repeatable.
+5. Authentication uses a separate `accounts` table so the Week 2 user contract stays unchanged.
+6. BCrypt through `spring-security-crypto`, without the full Spring Security filter chain.
+7. Opaque UUID tokens stored in `auth_sessions`, with refresh rotation and revocation.
+8. A single `ApiException` base and `GlobalExceptionHandler` for every error response.
+9. Validation errors include a `details` array; all other errors include an empty array.
+10. Week 3 development stays on `develop`.
+
+### Known problems / risks
+
+- Access tokens are issued but not yet required or validated by any endpoint. Protected-resource
+  behaviour will matter when the assistant calls the sample API in Week 9.
+- Authentication accounts and domain users are separate; registering does not create a `users` row.
+- Token lifetimes are constants in `AuthService`, not configuration. Move them to
+  `application.yml` if experiments need different values.
+- Expired auth sessions are not purged automatically; the table will grow slowly.
+- Orders reference users/products by ID without foreign keys, so deleting a user or product leaves
+  historical orders with dangling IDs.
+- Stock is not reserved or decremented, and there is no payment processing; `PAID` is a state set
+  through the update endpoint.
+- Integration tests still use the development `sample_api` database and delete rows from
+  `users`, `products`, `orders`, `accounts`, and `auth_sessions`.
+- The generic 500 handler logs and hides programming errors; check application logs when a 500 occurs.
+- Access and refresh tokens are stored as plaintext UUIDs in `auth_sessions`; acceptable for a
+  local sample API, but production systems should hash or encrypt stored bearer tokens.
+- The error body intentionally exposes domain messages such as "Order not found"; fine for a
+  sample API, not necessarily for production.
+
+### Week 3 summary (5 lines)
+
+1. Added 4 order endpoints with a testable `PENDING → PAID → SHIPPED` lifecycle and cancel rules.
+2. Added register, login, and rotating refresh-token endpoints with BCrypt password hashing.
+3. Replaced scattered error responses with one `@RestControllerAdvice` JSON shape for all errors.
+4. Reached exactly 15 endpoints; 24 REST Assured tests pass and the full build succeeds.
+5. Work is on `develop`; `main` stays at Week 2. Tokens are not enforced yet, and stock/order data is simplified.
+
+### Next week (Week 4)
+
+Add springdoc-openapi, document every endpoint and status code, save `docs/openapi.json`, write
+the 25–30 manual JUnit 5 + REST Assured baseline, configure JaCoCo, and record baseline coverage.
